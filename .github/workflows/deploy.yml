@@ -2,14 +2,12 @@ name: Deploy Node.js App to EKS
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
   ECR_REPO: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/nodejs-app
 
 jobs:
@@ -20,167 +18,293 @@ jobs:
       rds_endpoint: ${{ steps.terraform.outputs.rds_endpoint }}
       cluster_name: ${{ steps.terraform.outputs.cluster_name }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v2
 
-      - name: Terraform Init
-        run: terraform init
-        working-directory: infra
+    - name: Terraform Init
+      run: terraform init
+      working-directory: infra
 
-      - name: Terraform Apply
-        run: terraform apply -auto-approve
-        working-directory: infra
-        env:
-          TF_VAR_rds_password: ${{ secrets.RDS_PASSWORD }}
-          TF_VAR_cluster_name: ${{ env.CLUSTER_NAME }}
-          TF_VAR_region: ${{ env.AWS_REGION }}
+    - name: Terraform Apply
+      run: terraform apply -auto-approve
+      working-directory: infra
+      env:
+        TF_VAR_rds_password: ${{ secrets.RDS_PASSWORD }}
+        TF_VAR_cluster_name: ${{ env.CLUSTER_NAME }}
+        TF_VAR_region: ${{ env.AWS_REGION }}
 
-      - name: Get Terraform outputs
-        id: terraform
-        run: |
-          # Try JSON output
-          if terraform output -json > outputs.json 2>/dev/null; then
-            ECR_REPO_URL=$(jq -r '.ecr_repository_url.value' outputs.json)
-            RDS_ENDPOINT=$(jq -r '.rds_endpoint.value' outputs.json)
-            CLUSTER_NAME=$(jq -r '.cluster_name.value' outputs.json)
-            rm outputs.json
-          else
-            ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null || echo "")
-            RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null || echo "")
-            CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null || echo "")
-          fi
-
-          echo "ecr_repo_url=$ECR_REPO_URL" >> $GITHUB_OUTPUT
-          echo "rds_endpoint=$RDS_ENDPOINT" >> $GITHUB_OUTPUT
-          echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
-        working-directory: infra
+    - name: Get Terraform outputs
+      id: terraform
+      run: |
+        # Method 1: Try JSON output first (most reliable)
+        echo "Attempting to get Terraform outputs using JSON method..."
+        if terraform output -json > outputs.json 2>/dev/null; then
+          ECR_REPO_URL=$(jq -r '.ecr_repository_url.value' outputs.json 2>/dev/null || echo "")
+          RDS_ENDPOINT=$(jq -r '.rds_endpoint.value' outputs.json 2>/dev/null || echo "")
+          CLUSTER_NAME=$(jq -r '.cluster_name.value' outputs.json 2>/dev/null || echo "")
+          rm -f outputs.json
+        else
+          echo "JSON method failed, trying raw output method..."
+          # Method 2: Fallback to raw output
+          ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
+          RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
+          CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
+        fi
+        
+        # Debug: Show what we got
+        echo "Raw outputs:"
+        echo "ECR_REPO_URL: '$ECR_REPO_URL'"
+        echo "RDS_ENDPOINT: '$RDS_ENDPOINT'"
+        echo "CLUSTER_NAME: '$CLUSTER_NAME'"
+        
+        # Validate outputs
+        if [[ -z "$ECR_REPO_URL" ]]; then
+          echo "Warning: ECR_REPO_URL is empty, will use fallback"
+        fi
+        if [[ -z "$RDS_ENDPOINT" ]]; then
+          echo "Warning: RDS_ENDPOINT is empty"
+        fi
+        if [[ -z "$CLUSTER_NAME" ]]; then
+          echo "Warning: CLUSTER_NAME is empty, will use environment variable"
+        fi
+        
+        # Set job outputs
+        echo "ecr_repo_url=$ECR_REPO_URL" >> $GITHUB_OUTPUT
+        echo "rds_endpoint=$RDS_ENDPOINT" >> $GITHUB_OUTPUT
+        echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+        
+        # Debug output
+        echo "✅ Terraform outputs processed"
+      working-directory: infra
 
   deploy-application:
     runs-on: ubuntu-latest
     needs: provision-infrastructure
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      CLUSTER_NAME: ${{ needs.provision-infrastructure.outputs.cluster_name }}
-      RDS_ENDPOINT: ${{ needs.provision-infrastructure.outputs.rds_endpoint }}
       ECR_REPO_URL: ${{ needs.provision-infrastructure.outputs.ecr_repo_url }}
-      ECR_REPO: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/nodejs-app
-      GITHUB_SHA: ${{ github.sha }}
+      RDS_ENDPOINT: ${{ needs.provision-infrastructure.outputs.rds_endpoint }}
+      CLUSTER_NAME_OUTPUT: ${{ needs.provision-infrastructure.outputs.cluster_name }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build, tag, and push Docker image
-        run: |
-          echo "ECR_REPO_URL: '$ECR_REPO_URL'"
-          echo "ECR_REPO: '$ECR_REPO'"
-          echo "GITHUB_SHA: '$GITHUB_SHA'"
+    - name: Build, tag, and push Docker image
+      run: |
+        # Debug: Show all environment variables
+        echo "Debug: Environment variables:"
+        echo "ECR_REPO_URL: '$ECR_REPO_URL'"
+        echo "ECR_REPO: '$ECR_REPO'"
+        echo "GITHUB_SHA: '$GITHUB_SHA'"
+        
+        # Use ECR_REPO_URL if available, otherwise fallback to ECR_REPO
+        if [[ -n "$ECR_REPO_URL" ]]; then
+          IMAGE_URI="$ECR_REPO_URL"
+        else
+          IMAGE_URI="$ECR_REPO"
+        fi
+        
+        echo "Using IMAGE_URI: $IMAGE_URI"
+        
+        # Validate IMAGE_URI is not empty
+        if [[ -z "$IMAGE_URI" ]]; then
+          echo "Error: IMAGE_URI is empty. Cannot build Docker image."
+          exit 1
+        fi
+        
+        echo "Building Docker image..."
+        docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
+        
+        echo "Pushing Docker image..."
+        docker push $IMAGE_URI:$GITHUB_SHA
+        
+        echo "Building Docker image..."
+        docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
+        
+        # Create a timestamp-based tag for additional uniqueness
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        docker tag $IMAGE_URI:$GITHUB_SHA $IMAGE_URI:build-$TIMESTAMP
+        
+        echo "Pushing Docker image..."
+        docker push $IMAGE_URI:$GITHUB_SHA
+        docker push $IMAGE_URI:build-$TIMESTAMP
+        
+        echo "Tagged and pushed:"
+        echo "- $IMAGE_URI:$GITHUB_SHA"
+        echo "- $IMAGE_URI:build-$TIMESTAMP"
+        
+        echo "✅ Docker image pushed successfully"
+        
+        # Set IMAGE_URI for subsequent steps
+        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-          if [[ -n "$ECR_REPO_URL" ]]; then
-            IMAGE_URI="$ECR_REPO_URL"
+    - name: Verify EKS cluster connectivity
+      run: |
+        echo "Checking EKS cluster connectivity..."
+        aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION
+        
+        # Check if cluster endpoint is accessible
+        CLUSTER_ENDPOINT=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION --query 'cluster.endpoint' --output text)
+        echo "Cluster endpoint: $CLUSTER_ENDPOINT"
+        
+        # Test connectivity to the endpoint
+        if curl -k -m 10 "$CLUSTER_ENDPOINT" 2>/dev/null; then
+          echo "✅ Cluster endpoint is reachable"
+        else
+          echo "❌ Cannot reach cluster endpoint"
+          echo "This might be a network connectivity issue"
+        fi
+
+    - name: Configure kubectl with retry
+      run: |
+        echo "Configuring kubectl..."
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION; then
+            echo "✅ kubectl configured successfully"
+            break
           else
-            IMAGE_URI="$ECR_REPO"
+            retry_count=$((retry_count + 1))
+            echo "❌ kubectl configuration failed (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 10 seconds..."
+              sleep 10
+            fi
           fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ Failed to configure kubectl after $max_retries attempts"
+          exit 1
+        fi
 
-          if ! [[ "$IMAGE_URI" =~ ^[0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com\/.+$ ]]; then
-            echo "Error: invalid ECR URI: $IMAGE_URI"
-            exit 1
-          fi
-
-          docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
-          docker push $IMAGE_URI:$GITHUB_SHA
-          docker tag $IMAGE_URI:$GITHUB_SHA $IMAGE_URI:latest
-          docker push $IMAGE_URI:latest
-
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          docker tag $IMAGE_URI:$GITHUB_SHA $IMAGE_URI:build-$TIMESTAMP
-          docker push $IMAGE_URI:build-$TIMESTAMP
-
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
-
-      - name: Verify EKS cluster endpoint reachability
-        run: |
-          ENDPOINT=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION --query 'cluster.endpoint' --output text)
-          if curl -m 10 -sf $ENDPOINT; then
-            echo "Cluster endpoint reachable"
+    - name: Test kubectl connectivity
+      run: |
+        echo "Testing kubectl connectivity..."
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if kubectl get nodes --request-timeout=30s; then
+            echo "✅ kubectl connectivity test passed"
+            break
           else
-            echo "Cannot reach cluster endpoint"
-            exit 1
+            retry_count=$((retry_count + 1))
+            echo "❌ kubectl connectivity test failed (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 15 seconds..."
+              sleep 15
+            fi
           fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ kubectl connectivity test failed after $max_retries attempts"
+          echo "Check your EKS cluster security groups and network configuration"
+          exit 1
+        fi
 
-      - name: Configure kubectl
-        run: |
-          retries=3; count=0
-          until aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION || [ $count -ge $retries ]; do
-            count=$((count+1))
-            echo "Retrying kubectl config ($count/$retries)…"
-            sleep 10
-          done
-          if [ $count -ge $retries ]; then exit 1; fi
-
-      - name: Test kubectl connectivity
-        run: |
-          retries=3; count=0
-          until kubectl get nodes --request-timeout=10s || [ $count -ge $retries ]; do
-            count=$((count+1))
-            echo "Retrying kubectl connectivity ($count/$retries)…"
-            sleep 15
-          done
-          if [ $count -ge $retries ]; then exit 1; fi
-
-      - name: Create or update Kubernetes secret
-        run: |
-          SECRET_YAML=$(kubectl create secret generic db-secret \
+    - name: Create Kubernetes secret with retry
+      run: |
+        echo "Creating Kubernetes secret..."
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if kubectl create secret generic db-secret \
             --from-literal=password=${{ secrets.RDS_PASSWORD }} \
-            --dry-run=client -o yaml)
-          kubectl apply -f - <<<"$SECRET_YAML"
+            --dry-run=client -o yaml | kubectl apply -f - --request-timeout=30s; then
+            echo "✅ Kubernetes secret created successfully"
+            break
+          else
+            retry_count=$((retry_count + 1))
+            echo "❌ Failed to create secret (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 15 seconds..."
+              sleep 15
+            fi
+          fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ Failed to create Kubernetes secret after $max_retries attempts"
+          exit 1
+        fi
 
-      - name: Deploy Node.js application
-        run: |
-          DOCKER_IMAGE="${IMAGE_URI:-$ECR_REPO_URL}:${GITHUB_SHA}"
-          echo "Deploying image: $DOCKER_IMAGE"
+    - name: Deploy Node.js application
+      run: |
+        # Use IMAGE_URI from previous step, or fallback
+        if [[ -n "$IMAGE_URI" ]]; then
+          DOCKER_IMAGE="$IMAGE_URI:$GITHUB_SHA"
+        elif [[ -n "$ECR_REPO_URL" ]]; then
+          DOCKER_IMAGE="$ECR_REPO_URL:$GITHUB_SHA"
+        else
+          DOCKER_IMAGE="$ECR_REPO:$GITHUB_SHA"
+        fi
+        
+        echo "Deploying with Docker image: $DOCKER_IMAGE"
+        
+        # Replace placeholders in manifest
+        sed -i "s|{{IMAGE_URI}}|$DOCKER_IMAGE|g" k8s/deployment.yaml
+        sed -i "s|{{RDS_ENDPOINT}}|$RDS_ENDPOINT|g" k8s/deployment.yaml
+        
+        # Apply Kubernetes manifests with retry
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if kubectl apply -f k8s/deployment.yaml --request-timeout=60s && \
+             kubectl apply -f k8s/service.yaml --request-timeout=60s; then
+            echo "✅ Kubernetes manifests applied successfully"
+            break
+          else
+            retry_count=$((retry_count + 1))
+            echo "❌ Failed to apply manifests (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 15 seconds..."
+              sleep 15
+            fi
+          fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ Failed to apply Kubernetes manifests after $max_retries attempts"
+          exit 1
+        fi
+        
+        # Wait for rollout
+        kubectl rollout status deployment/nodejs-app --timeout=300s
 
-          sed -i "s|{{IMAGE_URI}}|$DOCKER_IMAGE|g" k8s/deployment.yaml
-          sed -i "s|{{RDS_ENDPOINT}}|$RDS_ENDPOINT|g" k8s/deployment.yaml
-
-          retries=3; count=0
-          until kubectl apply -f k8s/deployment.yaml --request-timeout=60s \
-             && kubectl apply -f k8s/service.yaml --request-timeout=60s \
-             || [ $count -ge $retries ]; do
-            count=$((count+1))
-            echo "Retrying apply manifests ($count/$retries)…"
-            sleep 15
-          done
-          if [ $count -ge $retries ]; then exit 1; fi
-
-          kubectl rollout status deployment/nodejs-app --timeout=300s
-
-      - name: Deploy monitoring stack
-        run: |
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm repo update
-          helm upgrade --install prometheus-stack prometheus-community/kube-prometheus-stack \
-            --namespace monitoring --create-namespace \
-            --set grafana.adminPassword=${{ secrets.GRAFANA_ADMIN_PASSWORD }} \
-            --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
-            --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
-            --timeout=10m
+    - name: Deploy monitoring stack
+      run: |
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo update
+        helm upgrade --install prometheus-stack prometheus-community/kube-prometheus-stack \
+          --namespace monitoring \
+          --create-namespace \
+          --set grafana.adminPassword=${{ secrets.GRAFANA_ADMIN_PASSWORD }} \
+          --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
+          --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+          --timeout=10m
