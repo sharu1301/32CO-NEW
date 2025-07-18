@@ -46,7 +46,6 @@ jobs:
     - name: Get Terraform outputs
       id: terraform
       run: |
-        # Method 1: Try JSON output first (most reliable)
         echo "Attempting to get Terraform outputs using JSON method..."
         if terraform output -json > outputs.json 2>/dev/null; then
           ECR_REPO_URL=$(jq -r '.ecr_repository_url.value' outputs.json 2>/dev/null || echo "")
@@ -55,37 +54,14 @@ jobs:
           rm -f outputs.json
         else
           echo "JSON method failed, trying raw output method..."
-          # Method 2: Fallback to raw output
-          ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
-          RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
-          CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
+          ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null | tr -d '\r\n\t' || echo "")
+          RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null | tr -d '\r\n\t' || echo "")
+          CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null | tr -d '\r\n\t' || echo "")
         fi
-        
-        # Debug: Show what we got
-        echo "Raw outputs:"
-        echo "ECR_REPO_URL: '$ECR_REPO_URL'"
-        echo "RDS_ENDPOINT: '$RDS_ENDPOINT'"
-        echo "CLUSTER_NAME: '$CLUSTER_NAME'"
-        
-        # Validate outputs
-        if [[ -z "$ECR_REPO_URL" ]]; then
-          echo "Warning: ECR_REPO_URL is empty, will use fallback"
-        fi
-        if [[ -z "$RDS_ENDPOINT" ]]; then
-          echo "Warning: RDS_ENDPOINT is empty"
-        fi
-        if [[ -z "$CLUSTER_NAME" ]]; then
-          echo "Warning: CLUSTER_NAME is empty, will use environment variable"
-        fi
-        
-        # Set job outputs
+
         echo "ecr_repo_url=$ECR_REPO_URL" >> $GITHUB_OUTPUT
         echo "rds_endpoint=$RDS_ENDPOINT" >> $GITHUB_OUTPUT
         echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
-        
-        # Debug output
-        echo "✅ Terraform outputs processed"
-      working-directory: infra
 
   deploy-application:
     runs-on: ubuntu-latest
@@ -93,7 +69,7 @@ jobs:
     env:
       ECR_REPO_URL: ${{ needs.provision-infrastructure.outputs.ecr_repo_url }}
       RDS_ENDPOINT: ${{ needs.provision-infrastructure.outputs.rds_endpoint }}
-      CLUSTER_NAME_OUTPUT: ${{ needs.provision-infrastructure.outputs.cluster_name }}
+      CLUSTER_NAME: ${{ needs.provision-infrastructure.outputs.cluster_name }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -106,136 +82,41 @@ jobs:
         aws-region: ${{ env.AWS_REGION }}
 
     - name: Login to Amazon ECR
-      id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
     - name: Build, tag, and push Docker image
       run: |
-        # Debug: Show all environment variables
-        echo "Debug: Environment variables:"
-        echo "ECR_REPO_URL: '$ECR_REPO_URL'"
-        echo "ECR_REPO: '$ECR_REPO'"
-        echo "GITHUB_SHA: '$GITHUB_SHA'"
-        
-        # Use ECR_REPO_URL if available, otherwise fallback to ECR_REPO
-        if [[ -n "$ECR_REPO_URL" ]]; then
-          IMAGE_URI="$ECR_REPO_URL"
-        else
-          IMAGE_URI="$ECR_REPO"
-        fi
-        
-        echo "Using IMAGE_URI: $IMAGE_URI"
-        
-        # Validate IMAGE_URI is not empty
+        IMAGE_URI="${{ env.ECR_REPO_URL }}"
         if [[ -z "$IMAGE_URI" ]]; then
-          echo "Error: IMAGE_URI is empty. Cannot build Docker image."
-          exit 1
+          IMAGE_URI="${{ env.ECR_REPO }}"
         fi
-        
-        echo "Building Docker image..."
+
         docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
-        
-        echo "Pushing Docker image..."
-        docker push $IMAGE_URI:$GITHUB_SHA
-        
-        echo "Building Docker image..."
-        docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
-        
-        # Create a timestamp-based tag for additional uniqueness
         TIMESTAMP=$(date +%Y%m%d-%H%M%S)
         docker tag $IMAGE_URI:$GITHUB_SHA $IMAGE_URI:build-$TIMESTAMP
-        
-        echo "Pushing Docker image..."
         docker push $IMAGE_URI:$GITHUB_SHA
         docker push $IMAGE_URI:build-$TIMESTAMP
-        
-        echo "Tagged and pushed:"
-        echo "- $IMAGE_URI:$GITHUB_SHA"
-        echo "- $IMAGE_URI:build-$TIMESTAMP"
-        
-        echo "✅ Docker image pushed successfully"
-        
-        # Set IMAGE_URI for subsequent steps
         echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-    - name: Verify EKS cluster connectivity
+    - name: Configure kubectl
       run: |
-        echo "Checking EKS cluster connectivity..."
-        aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION
-        
-        # Check if cluster endpoint is accessible
-        CLUSTER_ENDPOINT=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION --query 'cluster.endpoint' --output text)
-        echo "Cluster endpoint: $CLUSTER_ENDPOINT"
-        
-        # Test connectivity to the endpoint
-        if curl -k -m 10 "$CLUSTER_ENDPOINT" 2>/dev/null; then
-          echo "✅ Cluster endpoint is reachable"
-        else
-          echo "❌ Cannot reach cluster endpoint"
-          echo "This might be a network connectivity issue"
-        fi
-
-    - name: Configure kubectl with retry
-      run: |
-        echo "Configuring kubectl..."
-        max_retries=3
-        retry_count=0
-        
-        while [ $retry_count -lt $max_retries ]; do
-          if aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION; then
-            echo "✅ kubectl configured successfully"
-            break
-          else
-            retry_count=$((retry_count + 1))
-            echo "❌ kubectl configuration failed (attempt $retry_count/$max_retries)"
-            if [ $retry_count -lt $max_retries ]; then
-              echo "Retrying in 10 seconds..."
-              sleep 10
-            fi
-          fi
-        done
-        
-        if [ $retry_count -eq $max_retries ]; then
-          echo "❌ Failed to configure kubectl after $max_retries attempts"
-          exit 1
-        fi
+        aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
 
     - name: Test kubectl connectivity
       run: |
-        echo "Testing kubectl connectivity..."
-        max_retries=3
-        retry_count=0
-        
-        while [ $retry_count -lt $max_retries ]; do
-          if kubectl get nodes --request-timeout=30s; then
-            echo "✅ kubectl connectivity test passed"
-            break
-          else
-            retry_count=$((retry_count + 1))
-            echo "❌ kubectl connectivity test failed (attempt $retry_count/$max_retries)"
-            if [ $retry_count -lt $max_retries ]; then
-              echo "Retrying in 15 seconds..."
-              sleep 15
-            fi
-          fi
-        done
-        
-        if [ $retry_count -eq $max_retries ]; then
-          echo "❌ kubectl connectivity test failed after $max_retries attempts"
-          echo "Check your EKS cluster security groups and network configuration"
-          exit 1
-        fi
+        kubectl get nodes --request-timeout=30s
 
     - name: Create Kubernetes secret with retry
       run: |
         echo "Creating Kubernetes secret..."
         max_retries=3
         retry_count=0
-        
+
         while [ $retry_count -lt $max_retries ]; do
+          kubectl delete secret db-secret --ignore-not-found
+
           if kubectl create secret generic db-secret \
-            --from-literal=password=${{ secrets.RDS_PASSWORD }} \
-            --dry-run=client -o yaml | kubectl apply -f - --request-timeout=30s; then
+            --from-literal=password="${{ secrets.RDS_PASSWORD }}"; then
             echo "✅ Kubernetes secret created successfully"
             break
           else
@@ -247,7 +128,7 @@ jobs:
             fi
           fi
         done
-        
+
         if [ $retry_count -eq $max_retries ]; then
           echo "❌ Failed to create Kubernetes secret after $max_retries attempts"
           exit 1
@@ -255,46 +136,12 @@ jobs:
 
     - name: Deploy Node.js application
       run: |
-        # Use IMAGE_URI from previous step, or fallback
-        if [[ -n "$IMAGE_URI" ]]; then
-          DOCKER_IMAGE="$IMAGE_URI:$GITHUB_SHA"
-        elif [[ -n "$ECR_REPO_URL" ]]; then
-          DOCKER_IMAGE="$ECR_REPO_URL:$GITHUB_SHA"
-        else
-          DOCKER_IMAGE="$ECR_REPO:$GITHUB_SHA"
-        fi
-        
-        echo "Deploying with Docker image: $DOCKER_IMAGE"
-        
-        # Replace placeholders in manifest
-        sed -i "s|{{IMAGE_URI}}|$DOCKER_IMAGE|g" k8s/deployment.yaml
+        IMAGE_URI="${{ env.IMAGE_URI }}:$GITHUB_SHA"
+        sed -i "s|{{IMAGE_URI}}|$IMAGE_URI|g" k8s/deployment.yaml
         sed -i "s|{{RDS_ENDPOINT}}|$RDS_ENDPOINT|g" k8s/deployment.yaml
-        
-        # Apply Kubernetes manifests with retry
-        max_retries=3
-        retry_count=0
-        
-        while [ $retry_count -lt $max_retries ]; do
-          if kubectl apply -f k8s/deployment.yaml --request-timeout=60s && \
-             kubectl apply -f k8s/service.yaml --request-timeout=60s; then
-            echo "✅ Kubernetes manifests applied successfully"
-            break
-          else
-            retry_count=$((retry_count + 1))
-            echo "❌ Failed to apply manifests (attempt $retry_count/$max_retries)"
-            if [ $retry_count -lt $max_retries ]; then
-              echo "Retrying in 15 seconds..."
-              sleep 15
-            fi
-          fi
-        done
-        
-        if [ $retry_count -eq $max_retries ]; then
-          echo "❌ Failed to apply Kubernetes manifests after $max_retries attempts"
-          exit 1
-        fi
-        
-        # Wait for rollout
+
+        kubectl apply -f k8s/deployment.yaml --request-timeout=60s
+        kubectl apply -f k8s/service.yaml --request-timeout=60s
         kubectl rollout status deployment/nodejs-app --timeout=300s
 
     - name: Deploy monitoring stack
@@ -308,3 +155,4 @@ jobs:
           --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
           --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
           --timeout=10m
+
