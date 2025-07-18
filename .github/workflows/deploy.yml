@@ -46,16 +46,37 @@ jobs:
     - name: Get Terraform outputs
       id: terraform
       run: |
-        # Function to get clean terraform output
-        get_terraform_output() {
-          local output_name=$1
-          terraform output -raw "$output_name" 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g'
-        }
+        # Method 1: Try JSON output first (most reliable)
+        echo "Attempting to get Terraform outputs using JSON method..."
+        if terraform output -json > outputs.json 2>/dev/null; then
+          ECR_REPO_URL=$(jq -r '.ecr_repository_url.value' outputs.json 2>/dev/null || echo "")
+          RDS_ENDPOINT=$(jq -r '.rds_endpoint.value' outputs.json 2>/dev/null || echo "")
+          CLUSTER_NAME=$(jq -r '.cluster_name.value' outputs.json 2>/dev/null || echo "")
+          rm -f outputs.json
+        else
+          echo "JSON method failed, trying raw output method..."
+          # Method 2: Fallback to raw output
+          ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
+          RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
+          CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null | tr -d '\r\n\t' | sed 's/[^[:print:]]//g' || echo "")
+        fi
         
-        # Get outputs
-        ECR_REPO_URL=$(get_terraform_output ecr_repository_url)
-        RDS_ENDPOINT=$(get_terraform_output rds_endpoint)
-        CLUSTER_NAME=$(get_terraform_output cluster_name)
+        # Debug: Show what we got
+        echo "Raw outputs:"
+        echo "ECR_REPO_URL: '$ECR_REPO_URL'"
+        echo "RDS_ENDPOINT: '$RDS_ENDPOINT'"
+        echo "CLUSTER_NAME: '$CLUSTER_NAME'"
+        
+        # Validate outputs
+        if [[ -z "$ECR_REPO_URL" ]]; then
+          echo "Warning: ECR_REPO_URL is empty, will use fallback"
+        fi
+        if [[ -z "$RDS_ENDPOINT" ]]; then
+          echo "Warning: RDS_ENDPOINT is empty"
+        fi
+        if [[ -z "$CLUSTER_NAME" ]]; then
+          echo "Warning: CLUSTER_NAME is empty, will use environment variable"
+        fi
         
         # Set job outputs
         echo "ecr_repo_url=$ECR_REPO_URL" >> $GITHUB_OUTPUT
@@ -63,9 +84,7 @@ jobs:
         echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
         
         # Debug output
-        echo "✅ ECR Repository URL: $ECR_REPO_URL"
-        echo "✅ RDS Endpoint: $RDS_ENDPOINT"
-        echo "✅ Cluster Name: $CLUSTER_NAME"
+        echo "✅ Terraform outputs processed"
       working-directory: infra
 
   deploy-application:
