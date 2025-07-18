@@ -1,4 +1,24 @@
-# Updated RDS Instance Module
+# Custom Parameter Group for PostgreSQL 13
+resource "aws_db_parameter_group" "nodejs_db" {
+  name   = "nodejs-app-db-pg"
+  family = "postgres13"
+  
+  parameter {
+    name  = "autovacuum"
+    value = "1"
+  }
+  
+  parameter {
+    name  = "client_encoding"
+    value = "utf8"
+  }
+  
+  tags = {
+    Name = "nodejs-app-db-pg"
+  }
+}
+
+# RDS Instance Module
 module "rds" {
   source  = "terraform-aws-modules/rds/aws"
   version = "~> 5.0"
@@ -17,12 +37,12 @@ module "rds" {
   parameter_group_name       = aws_db_parameter_group.nodejs_db.name
   create_db_parameter_group  = false
 
-  # ✅ Use the correct security group in the same VPC
+  # Security - Use the security group from main.tf
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   
-  # ✅ Ensure subnet group is in the same VPC
+  # Subnet configuration
   subnet_ids             = module.vpc.private_subnets
-  create_db_subnet_group = true  # Let the module create the subnet group
+  create_db_subnet_group = true
   
   publicly_accessible    = false
 
@@ -39,4 +59,3 @@ module "rds" {
     Name = "nodejs-app-database"
   }
 }
-

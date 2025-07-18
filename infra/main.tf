@@ -20,7 +20,7 @@ provider "aws" {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 3.0"
+  version = "~> 5.0"  # Updated to newer version to fix deprecated arguments
   
   name = "nodejs-app-vpc"
   cidr = "10.0.0.0/16"
@@ -39,28 +39,28 @@ module "vpc" {
   }
 }
 
-# Add this to your main.tf file after the VPC module
-
 # RDS Security Group
 resource "aws_security_group" "rds_sg" {
   name        = "nodejs-app-rds-sg"
   description = "Security group for RDS PostgreSQL instance"
   vpc_id      = module.vpc.vpc_id
 
-  # Allow PostgreSQL traffic from private subnets
+  # Allow PostgreSQL traffic from EKS cluster security group
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [module.eks.cluster_security_group_id]
+    description     = "Allow PostgreSQL access from EKS cluster"
+  }
+
+  # Allow PostgreSQL traffic from private subnets (for debugging/maintenance)
   ingress {
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
     cidr_blocks = module.vpc.private_subnets_cidr_blocks
-  }
-
-  # Allow PostgreSQL traffic from public subnets (if needed)
-  ingress {
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = module.vpc.public_subnets_cidr_blocks
+    description = "Allow PostgreSQL access from private subnets"
   }
 
   egress {
@@ -68,10 +68,10 @@ resource "aws_security_group" "rds_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
   }
 
   tags = {
     Name = "nodejs-app-rds-sg"
   }
 }
-
