@@ -6,6 +6,7 @@ module "rds" {
 
   engine               = "postgres"
   engine_version       = "14.5"
+  family               = "postgres14"   # ADD THIS LINE
   instance_class       = "db.t3.micro"
   allocated_storage    = 20
 
