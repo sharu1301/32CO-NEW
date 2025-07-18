@@ -92,15 +92,39 @@ jobs:
 
     - name: Build, tag, and push Docker image
       run: |
+        # Debug: Show all environment variables
+        echo "Debug: Environment variables:"
+        echo "ECR_REPO_URL: '$ECR_REPO_URL'"
+        echo "ECR_REPO: '$ECR_REPO'"
+        echo "GITHUB_SHA: '$GITHUB_SHA'"
+        
+        # Use ECR_REPO_URL if available, otherwise fallback to ECR_REPO
+        if [[ -n "$ECR_REPO_URL" ]]; then
+          IMAGE_URI="$ECR_REPO_URL"
+        else
+          IMAGE_URI="$ECR_REPO"
+        fi
+        
+        echo "Using IMAGE_URI: $IMAGE_URI"
+        
+        # Validate IMAGE_URI is not empty
+        if [[ -z "$IMAGE_URI" ]]; then
+          echo "Error: IMAGE_URI is empty. Cannot build Docker image."
+          exit 1
+        fi
+        
         echo "Building Docker image..."
-        docker build -t $ECR_REPO_URL:$GITHUB_SHA -f app/Dockerfile ./app
-        docker tag $ECR_REPO_URL:$GITHUB_SHA $ECR_REPO_URL:latest
+        docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
+        docker tag $IMAGE_URI:$GITHUB_SHA $IMAGE_URI:latest
         
         echo "Pushing Docker image..."
-        docker push $ECR_REPO_URL:$GITHUB_SHA
-        docker push $ECR_REPO_URL:latest
+        docker push $IMAGE_URI:$GITHUB_SHA
+        docker push $IMAGE_URI:latest
         
         echo "✅ Docker image pushed successfully"
+        
+        # Set IMAGE_URI for subsequent steps
+        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
     - name: Configure kubectl
       run: |
@@ -114,8 +138,19 @@ jobs:
 
     - name: Deploy Node.js application
       run: |
+        # Use IMAGE_URI from previous step, or fallback
+        if [[ -n "$IMAGE_URI" ]]; then
+          DOCKER_IMAGE="$IMAGE_URI:$GITHUB_SHA"
+        elif [[ -n "$ECR_REPO_URL" ]]; then
+          DOCKER_IMAGE="$ECR_REPO_URL:$GITHUB_SHA"
+        else
+          DOCKER_IMAGE="$ECR_REPO:$GITHUB_SHA"
+        fi
+        
+        echo "Deploying with Docker image: $DOCKER_IMAGE"
+        
         # Replace placeholders in manifest
-        sed -i "s|{{IMAGE_URI}}|$ECR_REPO_URL:$GITHUB_SHA|g" k8s/deployment.yaml
+        sed -i "s|{{IMAGE_URI}}|$DOCKER_IMAGE|g" k8s/deployment.yaml
         sed -i "s|{{RDS_ENDPOINT}}|$RDS_ENDPOINT|g" k8s/deployment.yaml
         
         # Apply Kubernetes manifests
