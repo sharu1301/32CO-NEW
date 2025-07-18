@@ -2,14 +2,17 @@
 resource "aws_db_parameter_group" "nodejs_db" {
   name   = "nodejs-app-db-pg"
   family = "postgres13"
+
   parameter {
     name  = "autovacuum"
     value = "1"
   }
+
   parameter {
     name  = "client_encoding"
     value = "utf8"
   }
+
   tags = {
     Name = "nodejs-app-db-pg"
   }
@@ -22,17 +25,17 @@ module "rds" {
 
   identifier             = "nodejs-app-db"
   engine                 = "postgres"
-  engine_version         = "13.21"                                    # ✅ Updated to latest available
+  engine_version         = "13.21"
   major_engine_version   = "13"
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
   db_name                = "nodejs_prod"
-  username               = "dbadmin"                                  # ✅ Changed from 'admin' to 'dbadmin'
+  username               = "dbadmin"                               # ✅ Changed from "admin" to "dbadmin"
   password               = var.rds_password
 
   # Use custom parameter group
   parameter_group_name       = aws_db_parameter_group.nodejs_db.name
-  create_db_parameter_group  = false                                  # Prevent module from creating one
+  create_db_parameter_group  = false
 
   # Security
   vpc_security_group_ids = [module.eks.cluster_primary_security_group_id]
@@ -43,7 +46,7 @@ module "rds" {
   maintenance_window          = "Mon:00:00-Mon:03:00"
   backup_window               = "03:00-06:00"
   backup_retention_period     = 7
-  skip_final_snapshot         = true  # For assessment only
+  skip_final_snapshot         = true
 
   # Monitoring
   performance_insights_enabled = true
@@ -52,3 +55,4 @@ module "rds" {
     Name = "nodejs-app-database"
   }
 }
+
