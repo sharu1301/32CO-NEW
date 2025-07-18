@@ -2,17 +2,14 @@
 resource "aws_db_parameter_group" "nodejs_db" {
   name   = "nodejs-app-db-pg"
   family = "postgres13"
-
   parameter {
     name  = "autovacuum"
     value = "1"
   }
-
   parameter {
     name  = "client_encoding"
     value = "utf8"
   }
-
   tags = {
     Name = "nodejs-app-db-pg"
   }
@@ -30,7 +27,7 @@ module "rds" {
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
   db_name                = "nodejs_prod"
-  username               = "admin"
+  username               = "dbadmin"                                  # ✅ Changed from 'admin' to 'dbadmin'
   password               = var.rds_password
 
   # Use custom parameter group
@@ -55,4 +52,3 @@ module "rds" {
     Name = "nodejs-app-database"
   }
 }
-
