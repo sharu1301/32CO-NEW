@@ -1,6 +1,6 @@
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.0" 
+  version = "~> 20.0"
 
   cluster_name    = var.cluster_name
   cluster_version = "1.27"
@@ -8,11 +8,9 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  # Enable access to EKS API endpoint publicly (important for kubectl from GitHub Actions or your local machine)
-  access_config = {
-    endpoint_public_access  = true    # ✅ Enable public access to the API
-    endpoint_private_access = true    # ✅ Keep private access enabled too
-  }
+  # ✅ Public access to EKS API
+  cluster_endpoint_public_access  = true
+  cluster_endpoint_private_access = true
 
   enable_irsa = true
 
@@ -42,8 +40,8 @@ module "eks" {
 }
 
 resource "aws_ecr_repository" "nodejs_app" {
-  name                  = "nodejs-app"
-  image_tag_mutability  = "IMMUTABLE"
+  name                 = "nodejs-app"
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
