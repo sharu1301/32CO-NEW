@@ -24,7 +24,7 @@ module "rds" {
   identifier = "nodejs-app-db"
 
   engine               = "postgres"
-  engine_version       = "14.5"
+  engine_version       = "13.11"
   parameter_group_name = aws_db_parameter_group.nodejs_db.name  # REFERENCE CUSTOM PG
   instance_class       = "db.t3.micro"
   allocated_storage    = 20
