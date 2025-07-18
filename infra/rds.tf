@@ -26,14 +26,16 @@ module "rds" {
   identifier             = "nodejs-app-db"
   engine                 = "postgres"
   engine_version         = "13.11"
-  major_engine_version   = "13"                                       # ✅ Match
+  major_engine_version   = "13"
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
   db_name                = "nodejs_prod"
   username               = "admin"
   password               = var.rds_password
 
-  parameter_group_name   = aws_db_parameter_group.nodejs_db.name      # ✅ Use custom PG
+  # 👇 Use custom parameter group
+  parameter_group_name       = aws_db_parameter_group.nodejs_db.name
+  create_db_parameter_group  = false                       # 👈 prevent module from creating one
 
   # Security
   vpc_security_group_ids = [module.eks.cluster_primary_security_group_id]
