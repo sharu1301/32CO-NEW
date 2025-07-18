@@ -184,4 +184,3 @@ jobs:
             --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
             --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
             --timeout=10m
-
