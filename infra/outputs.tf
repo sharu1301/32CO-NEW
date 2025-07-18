@@ -4,6 +4,8 @@ output "ecr_repository_url" {
 
 output "rds_endpoint" {
   value = module.rds.db_instance_endpoint
+  description = "RDS endpoint"
+  sensitive   = true
 }
 
 output "cluster_name" {

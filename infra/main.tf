@@ -38,3 +38,40 @@ module "vpc" {
     Environment = "prod"
   }
 }
+
+# Add this to your main.tf file after the VPC module
+
+# RDS Security Group
+resource "aws_security_group" "rds_sg" {
+  name        = "nodejs-app-rds-sg"
+  description = "Security group for RDS PostgreSQL instance"
+  vpc_id      = module.vpc.vpc_id
+
+  # Allow PostgreSQL traffic from private subnets
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = module.vpc.private_subnets_cidr_blocks
+  }
+
+  # Allow PostgreSQL traffic from public subnets (if needed)
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = module.vpc.public_subnets_cidr_blocks
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "nodejs-app-rds-sg"
+  }
+}
+
