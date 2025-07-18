@@ -25,7 +25,7 @@ module "rds" {
 
   identifier             = "nodejs-app-db"
   engine                 = "postgres"
-  engine_version         = "13.11"
+  engine_version         = "13.21"                                    # ✅ Updated to latest available
   major_engine_version   = "13"
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
@@ -33,9 +33,9 @@ module "rds" {
   username               = "admin"
   password               = var.rds_password
 
-  # 👇 Use custom parameter group
+  # Use custom parameter group
   parameter_group_name       = aws_db_parameter_group.nodejs_db.name
-  create_db_parameter_group  = false                       # 👈 prevent module from creating one
+  create_db_parameter_group  = false                                  # Prevent module from creating one
 
   # Security
   vpc_security_group_ids = [module.eks.cluster_primary_security_group_id]
@@ -46,7 +46,7 @@ module "rds" {
   maintenance_window          = "Mon:00:00-Mon:03:00"
   backup_window               = "03:00-06:00"
   backup_retention_period     = 7
-  skip_final_snapshot         = true  # For assessment only - not recommended in prod
+  skip_final_snapshot         = true  # For assessment only
 
   # Monitoring
   performance_insights_enabled = true
