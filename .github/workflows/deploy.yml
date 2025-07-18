@@ -134,11 +134,24 @@ jobs:
         
         echo "Building Docker image..."
         docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
-        docker tag $IMAGE_URI:$GITHUB_SHA $IMAGE_URI:latest
         
         echo "Pushing Docker image..."
         docker push $IMAGE_URI:$GITHUB_SHA
-        docker push $IMAGE_URI:latest
+        
+        echo "Building Docker image..."
+        docker build -t $IMAGE_URI:$GITHUB_SHA -f app/Dockerfile ./app
+        
+        # Create a timestamp-based tag for additional uniqueness
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        docker tag $IMAGE_URI:$GITHUB_SHA $IMAGE_URI:build-$TIMESTAMP
+        
+        echo "Pushing Docker image..."
+        docker push $IMAGE_URI:$GITHUB_SHA
+        docker push $IMAGE_URI:build-$TIMESTAMP
+        
+        echo "Tagged and pushed:"
+        echo "- $IMAGE_URI:$GITHUB_SHA"
+        echo "- $IMAGE_URI:build-$TIMESTAMP"
         
         echo "✅ Docker image pushed successfully"
         
