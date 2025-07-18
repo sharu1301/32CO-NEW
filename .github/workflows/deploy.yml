@@ -7,7 +7,6 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
   ECR_REPO: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/nodejs-app
 
 jobs:
@@ -40,28 +39,18 @@ jobs:
       working-directory: infra
       env:
         TF_VAR_rds_password: ${{ secrets.RDS_PASSWORD }}
-        TF_VAR_cluster_name: ${{ env.CLUSTER_NAME }}
+        TF_VAR_cluster_name: ${{ secrets.EKS_CLUSTER_NAME }}
         TF_VAR_region: ${{ env.AWS_REGION }}
 
     - name: Get Terraform outputs
       id: terraform
       run: |
-        echo "Attempting to get Terraform outputs using JSON method..."
-        if terraform output -json > outputs.json 2>/dev/null; then
-          ECR_REPO_URL=$(jq -r '.ecr_repository_url.value' outputs.json 2>/dev/null || echo "")
-          RDS_ENDPOINT=$(jq -r '.rds_endpoint.value' outputs.json 2>/dev/null || echo "")
-          CLUSTER_NAME=$(jq -r '.cluster_name.value' outputs.json 2>/dev/null || echo "")
-          rm -f outputs.json
-        else
-          echo "JSON method failed, trying raw output method..."
-          ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null | tr -d '\r\n\t' || echo "")
-          RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null | tr -d '\r\n\t' || echo "")
-          CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null | tr -d '\r\n\t' || echo "")
-        fi
+        echo "Getting Terraform outputs..."
+        terraform output -json > outputs.json
 
-        echo "ecr_repo_url=$ECR_REPO_URL" >> $GITHUB_OUTPUT
-        echo "rds_endpoint=$RDS_ENDPOINT" >> $GITHUB_OUTPUT
-        echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+        echo "ecr_repo_url=$(jq -r '.ecr_repository_url.value' outputs.json)" >> $GITHUB_OUTPUT
+        echo "rds_endpoint=$(jq -r '.rds_endpoint.value' outputs.json)" >> $GITHUB_OUTPUT
+        echo "cluster_name=$(jq -r '.cluster_name.value' outputs.json)" >> $GITHUB_OUTPUT
 
   deploy-application:
     runs-on: ubuntu-latest
@@ -100,11 +89,13 @@ jobs:
 
     - name: Configure kubectl
       run: |
+        echo "Configuring kubectl for cluster: $CLUSTER_NAME"
         aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
 
     - name: Test kubectl connectivity
       run: |
-        kubectl get nodes --request-timeout=30s
+        echo "Testing kubectl connectivity..."
+        kubectl get nodes
 
     - name: Create Kubernetes secret with retry
       run: |
@@ -122,10 +113,7 @@ jobs:
           else
             retry_count=$((retry_count + 1))
             echo "❌ Failed to create secret (attempt $retry_count/$max_retries)"
-            if [ $retry_count -lt $max_retries ]; then
-              echo "Retrying in 15 seconds..."
-              sleep 15
-            fi
+            sleep 15
           fi
         done
 
@@ -140,8 +128,8 @@ jobs:
         sed -i "s|{{IMAGE_URI}}|$IMAGE_URI|g" k8s/deployment.yaml
         sed -i "s|{{RDS_ENDPOINT}}|$RDS_ENDPOINT|g" k8s/deployment.yaml
 
-        kubectl apply -f k8s/deployment.yaml --request-timeout=60s
-        kubectl apply -f k8s/service.yaml --request-timeout=60s
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
         kubectl rollout status deployment/nodejs-app --timeout=300s
 
     - name: Deploy monitoring stack
