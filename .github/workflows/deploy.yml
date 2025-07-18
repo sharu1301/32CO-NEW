@@ -145,15 +145,100 @@ jobs:
         # Set IMAGE_URI for subsequent steps
         echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-    - name: Configure kubectl
+    - name: Verify EKS cluster connectivity
       run: |
-        aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+        echo "Checking EKS cluster connectivity..."
+        aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION
+        
+        # Check if cluster endpoint is accessible
+        CLUSTER_ENDPOINT=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION --query 'cluster.endpoint' --output text)
+        echo "Cluster endpoint: $CLUSTER_ENDPOINT"
+        
+        # Test connectivity to the endpoint
+        if curl -k -m 10 "$CLUSTER_ENDPOINT" 2>/dev/null; then
+          echo "✅ Cluster endpoint is reachable"
+        else
+          echo "❌ Cannot reach cluster endpoint"
+          echo "This might be a network connectivity issue"
+        fi
 
-    - name: Create Kubernetes secret
+    - name: Configure kubectl with retry
       run: |
-        kubectl create secret generic db-secret \
-          --from-literal=password=${{ secrets.RDS_PASSWORD }} \
-          --dry-run=client -o yaml | kubectl apply -f -
+        echo "Configuring kubectl..."
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION; then
+            echo "✅ kubectl configured successfully"
+            break
+          else
+            retry_count=$((retry_count + 1))
+            echo "❌ kubectl configuration failed (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 10 seconds..."
+              sleep 10
+            fi
+          fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ Failed to configure kubectl after $max_retries attempts"
+          exit 1
+        fi
+
+    - name: Test kubectl connectivity
+      run: |
+        echo "Testing kubectl connectivity..."
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if kubectl get nodes --request-timeout=30s; then
+            echo "✅ kubectl connectivity test passed"
+            break
+          else
+            retry_count=$((retry_count + 1))
+            echo "❌ kubectl connectivity test failed (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 15 seconds..."
+              sleep 15
+            fi
+          fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ kubectl connectivity test failed after $max_retries attempts"
+          echo "Check your EKS cluster security groups and network configuration"
+          exit 1
+        fi
+
+    - name: Create Kubernetes secret with retry
+      run: |
+        echo "Creating Kubernetes secret..."
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if kubectl create secret generic db-secret \
+            --from-literal=password=${{ secrets.RDS_PASSWORD }} \
+            --dry-run=client -o yaml | kubectl apply -f - --request-timeout=30s; then
+            echo "✅ Kubernetes secret created successfully"
+            break
+          else
+            retry_count=$((retry_count + 1))
+            echo "❌ Failed to create secret (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 15 seconds..."
+              sleep 15
+            fi
+          fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ Failed to create Kubernetes secret after $max_retries attempts"
+          exit 1
+        fi
 
     - name: Deploy Node.js application
       run: |
@@ -172,12 +257,32 @@ jobs:
         sed -i "s|{{IMAGE_URI}}|$DOCKER_IMAGE|g" k8s/deployment.yaml
         sed -i "s|{{RDS_ENDPOINT}}|$RDS_ENDPOINT|g" k8s/deployment.yaml
         
-        # Apply Kubernetes manifests
-        kubectl apply -f k8s/deployment.yaml
-        kubectl apply -f k8s/service.yaml
+        # Apply Kubernetes manifests with retry
+        max_retries=3
+        retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+          if kubectl apply -f k8s/deployment.yaml --request-timeout=60s && \
+             kubectl apply -f k8s/service.yaml --request-timeout=60s; then
+            echo "✅ Kubernetes manifests applied successfully"
+            break
+          else
+            retry_count=$((retry_count + 1))
+            echo "❌ Failed to apply manifests (attempt $retry_count/$max_retries)"
+            if [ $retry_count -lt $max_retries ]; then
+              echo "Retrying in 15 seconds..."
+              sleep 15
+            fi
+          fi
+        done
+        
+        if [ $retry_count -eq $max_retries ]; then
+          echo "❌ Failed to apply Kubernetes manifests after $max_retries attempts"
+          exit 1
+        fi
         
         # Wait for rollout
-        kubectl rollout status deployment/nodejs-app --timeout=180s
+        kubectl rollout status deployment/nodejs-app --timeout=300s
 
     - name: Deploy monitoring stack
       run: |
@@ -188,4 +293,5 @@ jobs:
           --create-namespace \
           --set grafana.adminPassword=${{ secrets.GRAFANA_ADMIN_PASSWORD }} \
           --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
-          --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false
+          --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+          --timeout=10m
