@@ -228,10 +228,10 @@ jobs:
         
         while [ $retry_count -lt $max_retries ]; do
           # Delete existing secret if it exists (ignore errors)
-          kubectl delete secret db-secret --ignore-not-found=true --request-timeout=30s
+          kubectl delete secret db-secret --ignore-not-found=true
           
-          # Create the new secret
-          if kubectl create secret generic db-secret --from-literal=password=${{ secrets.RDS_PASSWORD }} --request-timeout=30s; then
+          # Create the new secret (remove --request-timeout as it's causing issues)
+          if kubectl create secret generic db-secret --from-literal=password=${{ secrets.RDS_PASSWORD }}; then
             echo "✅ Kubernetes secret created successfully"
             break
           else
