@@ -1,5 +1,5 @@
 - name: Create or update Kubernetes secret with retry
-      run: |
+      run:
         echo "Creating or updating Kubernetes secret..."
         max_retries=3
         retry_count=0
