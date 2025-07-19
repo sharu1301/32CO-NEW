@@ -223,31 +223,14 @@ jobs:
     - name: Create or update Kubernetes secret with retry
       run: |
         echo "Creating or updating Kubernetes secret..."
-        max_retries=3
-        retry_count=0
         
-        while [ $retry_count -lt $max_retries ]; do
-          # Delete existing secret if it exists (ignore errors)
-          kubectl delete secret db-secret --ignore-not-found=true
-          
-          # Create the new secret (remove --request-timeout as it's causing issues)
-          if kubectl create secret generic db-secret --from-literal=password=${{ secrets.RDS_PASSWORD }}; then
-            echo "✅ Kubernetes secret created successfully"
-            break
-          else
-            retry_count=$((retry_count + 1))
-            echo "❌ Failed to create secret (attempt $retry_count/$max_retries)"
-            if [ $retry_count -lt $max_retries ]; then
-              echo "Retrying in 15 seconds..."
-              sleep 15
-            fi
-          fi
-        done
+        # Delete existing secret if it exists (ignore errors)
+        kubectl delete secret db-secret --ignore-not-found=true || true
         
-        if [ $retry_count -eq $max_retries ]; then
-          echo "❌ Failed to create Kubernetes secret after $max_retries attempts"
-          exit 1
-        fi
+        # Create the new secret
+        kubectl create secret generic db-secret --from-literal=password="${{ secrets.RDS_PASSWORD }}"
+        
+        echo "✅ Kubernetes secret created successfully"
 
     - name: Deploy Node.js application
       run: |
