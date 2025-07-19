@@ -280,10 +280,4 @@ jobs:
       run: |
         helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
         helm repo update
-        helm upgrade --install prometheus-stack prometheus-community/kube-prometheus-stack \
-          --namespace monitoring \
-          --create-namespace \
-          --set grafana.adminPassword=${{ secrets.GRAFANA_ADMIN_PASSWORD }} \
-          --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
-          --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
-          --timeout=10m
+        helm upgrade --install prometheus-stack prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace --set grafana.adminPassword="${{ secrets.GRAFANA_ADMIN_PASSWORD }}" --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false --timeout=10m
