@@ -227,15 +227,16 @@ jobs:
         retry_count=0
         
         while [ $retry_count -lt $max_retries ]; do
-          # Use kubectl create with --dry-run=client and pipe to kubectl apply
-          if kubectl create secret generic db-secret \
-              --from-literal=password=${{ secrets.RDS_PASSWORD }} \
-              --dry-run=client -o yaml | kubectl apply -f - --request-timeout=30s; then
-            echo "✅ Kubernetes secret created/updated successfully"
+          # Delete existing secret if it exists (ignore errors)
+          kubectl delete secret db-secret --ignore-not-found=true --request-timeout=30s
+          
+          # Create the new secret
+          if kubectl create secret generic db-secret --from-literal=password=${{ secrets.RDS_PASSWORD }} --request-timeout=30s; then
+            echo "✅ Kubernetes secret created successfully"
             break
           else
             retry_count=$((retry_count + 1))
-            echo "❌ Failed to create/update secret (attempt $retry_count/$max_retries)"
+            echo "❌ Failed to create secret (attempt $retry_count/$max_retries)"
             if [ $retry_count -lt $max_retries ]; then
               echo "Retrying in 15 seconds..."
               sleep 15
@@ -244,7 +245,7 @@ jobs:
         done
         
         if [ $retry_count -eq $max_retries ]; then
-          echo "❌ Failed to create/update Kubernetes secret after $max_retries attempts"
+          echo "❌ Failed to create Kubernetes secret after $max_retries attempts"
           exit 1
         fi
 
